@@ -60,6 +60,18 @@ service cloud.firestore {
       return isAuthenticated() && request.auth.uid == userId;
     }
     
+    function getUserProfile() {
+      return get(/databases/$(database)/documents/userProfiles/$(request.auth.uid)).data;
+    }
+
+    function isPsychologist() {
+      return isAuthenticated() && getUserProfile().role == "psychologist";
+    }
+
+    function isPatient() {
+      return isAuthenticated() && getUserProfile().role == "patient";
+    }
+
     function isDocOwner() {
       return isAuthenticated() && request.auth.uid == resource.data.psychologistId;
     }
@@ -68,82 +80,86 @@ service cloud.firestore {
       return isAuthenticated() && request.auth.uid == request.resource.data.psychologistId;
     }
 
+    function isPatientUser() {
+      return isAuthenticated() && request.auth.uid == resource.data.userId;
+    }
+
     function isAdmin() {
       return isAuthenticated() && 
         (request.auth.token.email == "mateusdomingos28@hotmail.com" && request.auth.token.email_verified == true);
     }
 
-    function hasOnlyAllowedFields(fields) {
-      return request.resource.data.keys().hasOnly(fields);
-    }
-
-    function areImmutableFieldsUnchanged(fields) {
-      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(fields);
-    }
-
     // Domain Validators
     function isValidPatient(data) {
-      return data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
-             (!('email' in data) || (data.email is string && data.email.size() < 100)) &&
-             (!('phone' in data) || (data.phone is string && data.phone.size() < 30)) &&
-             data.psychologistId is string &&
-             data.psychologistId == request.auth.uid;
+      return data.name is string && data.name.size() > 0 &&
+             data.psychologistId is string;
     }
 
     function isValidSession(data) {
       return data.patientId is string &&
-             data.patientName is string &&
              data.date is string &&
              data.time is string &&
-             data.type in ['online', 'physical'] &&
-             data.status in ['pending', 'confirmed', 'cancelled', 'completed'] &&
-             data.psychologistId is string &&
-             data.psychologistId == request.auth.uid;
+             data.psychologistId is string;
+    }
+
+    function isValidUserProfile(data) {
+      return data.uid == request.auth.uid &&
+             data.role in ['psychologist', 'patient'];
     }
 
     function isValidMedicalRecord(data) {
       return data.patientId is string &&
              data.sessionId is string &&
-             data.psychologistId is string &&
-             data.psychologistId == request.auth.uid;
+             data.psychologistId is string;
     }
 
     function isValidMessage(data) {
-      return data.text is string && data.text.size() > 0 && data.text.size() < 5000 &&
-             data.senderId is string &&
+      return data.text is string && 
              data.patientId is string &&
-             data.psychologistId is string &&
-             data.psychologistId == request.auth.uid;
+             data.psychologistId is string;
+    }
+
+    // User Profiles
+    match /userProfiles/{userId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isOwner(userId) && isValidUserProfile(request.resource.data);
+      allow update: if isAuthenticated() && isOwner(userId) && isValidUserProfile(request.resource.data);
     }
 
     // Patients
     match /patients/{patientId} {
-      allow read: if isAuthenticated() && (isDocOwner() || isAdmin());
+      allow read: if isAuthenticated() && (isDocOwner() || isPatientUser() || isAdmin());
       allow create: if isAuthenticated() && isValidPatient(request.resource.data);
-      allow update: if isAuthenticated() && isDocOwner() && isValidPatient(request.resource.data) && areImmutableFieldsUnchanged(['psychologistId', 'createdAt']);
+      allow update: if isAuthenticated() && (isDocOwner() || isPatientUser()) && isValidPatient(request.resource.data);
       allow delete: if isAuthenticated() && (isDocOwner() || isAdmin());
     }
 
     // Sessions
     match /sessions/{sessionId} {
-      allow read: if isAuthenticated() && (isDocOwner() || isAdmin());
+      allow read: if isAuthenticated() && (
+        isDocOwner() || 
+        isAdmin() ||
+        (resource.data.patientId == request.auth.uid) || // If patientId is actually userId
+        (exists(/databases/$(database)/documents/patients/$(resource.data.patientId)) && 
+         get(/databases/$(database)/documents/patients/$(resource.data.patientId)).data.userId == request.auth.uid)
+      );
       allow create: if isAuthenticated() && isValidSession(request.resource.data);
-      allow update: if isAuthenticated() && isDocOwner() && isValidSession(request.resource.data) && areImmutableFieldsUnchanged(['psychologistId']);
+      allow update: if isAuthenticated() && (isDocOwner() || (resource.data.patientId != null && get(/databases/$(database)/documents/patients/$(resource.data.patientId)).data.userId == request.auth.uid)) && isValidSession(request.resource.data);
       allow delete: if isAuthenticated() && (isDocOwner() || isAdmin());
     }
 
     // Medical Records
     match /medicalRecords/{recordId} {
       allow read: if isAuthenticated() && (isDocOwner() || isAdmin());
-      allow create: if isAuthenticated() && isValidMedicalRecord(request.resource.data);
-      allow update: if isAuthenticated() && isDocOwner() && isValidMedicalRecord(request.resource.data) && areImmutableFieldsUnchanged(['psychologistId', 'createdAt']);
+      allow create: if isAuthenticated() && isPsychologist();
+      allow update: if isAuthenticated() && isPsychologist() && isDocOwner();
       allow delete: if isAuthenticated() && (isDocOwner() || isAdmin());
     }
 
     // Messages
     match /messages/{messageId} {
-      allow read: if isAuthenticated() && (isDocOwner() || isAdmin());
-      allow create: if isAuthenticated() && isValidMessage(request.resource.data);
+      allow read: if isAuthenticated() && (isDocOwner() || (isPatient() && resource.data.patientId == get(/databases/$(database)/documents/userProfiles/$(request.auth.uid)).data.patientId) || isAdmin());
+      allow create: if isAuthenticated();
       allow delete: if isAuthenticated() && (isDocOwner() || isAdmin());
     }
 

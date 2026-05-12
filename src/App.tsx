@@ -56,18 +56,15 @@ import {
   updateDoc, 
   deleteDoc,
   getDoc,
-  getDocs
+  getDocs,
+  setDoc
 } from 'firebase/firestore';
+import PatientPortal from './components/PatientPortal';
 import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameDay, addMonths, subMonths, startOfWeek, endOfWeek, isToday, parseISO, addDays, startOfDay } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { auth, db } from './firebase';
 import { generateMedicalRecord, GeneratedMedicalRecord, searchPlaces, PlaceSuggestion } from './services/aiService';
-import { clsx, type ClassValue } from 'clsx';
-import { twMerge } from 'tailwind-merge';
-
-function cn(...inputs: ClassValue[]) {
-  return twMerge(clsx(inputs));
-}
+import { cn } from './lib/utils';
 
 // --- Types ---
 
@@ -219,8 +216,17 @@ function Logo({ size = 'md', className, vertical = false }: { size?: 'sm' | 'md'
 
 // --- Components ---
 
+interface UserProfile {
+  uid: string;
+  name: string;
+  email: string;
+  role: 'psychologist' | 'patient';
+  patientId?: string;
+}
+
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
+  const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'dashboard' | 'calendar' | 'patients' | 'daily-schedule'>('dashboard');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -268,9 +274,27 @@ export default function App() {
     return unsubscribe;
   }, []);
 
+  // Profile Fetching
+  useEffect(() => {
+    if (!user) {
+      setProfile(null);
+      return;
+    }
+
+    const unsubProfile = onSnapshot(doc(db, 'userProfiles', user.uid), (snapshot) => {
+      if (snapshot.exists()) {
+        setProfile(snapshot.data() as UserProfile);
+      } else {
+        setProfile(null);
+      }
+    });
+
+    return unsubProfile;
+  }, [user]);
+
   // Data Fetching
   useEffect(() => {
-    if (!user) return;
+    if (!user || !profile || profile.role !== 'psychologist') return;
 
     const qPatients = query(collection(db, 'patients'), where('psychologistId', '==', user.uid), orderBy('name'));
     const unsubPatients = onSnapshot(qPatients, (snapshot) => {
@@ -306,6 +330,17 @@ export default function App() {
 
   const handleLogout = () => signOut(auth);
 
+  const handleSelectRole = async (role: 'psychologist' | 'patient') => {
+    if (!user) return;
+    const newProfile: UserProfile = {
+      uid: user.uid,
+      name: user.displayName || 'Usuário',
+      email: user.email || '',
+      role
+    };
+    await setDoc(doc(db, 'userProfiles', user.uid), newProfile);
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950">
@@ -320,13 +355,13 @@ export default function App() {
         <div className="max-w-md w-full text-center space-y-8">
           <div className="flex flex-col items-center">
             <Logo size="lg" vertical />
-            <p className="mt-6 text-slate-600 dark:text-slate-400 text-lg">A ferramenta essencial para psicólogos modernos.</p>
+            <p className="mt-6 text-slate-600 dark:text-slate-400 text-lg">A ferramenta essencial para psicólogos e seus pacientes.</p>
           </div>
           
           <div className="glass-card p-8 space-y-6">
             <div className="space-y-2">
-              <h2 className="text-xl font-semibold dark:text-slate-100">Bem-vindo de volta</h2>
-              <p className="text-sm text-slate-500 dark:text-slate-400">Organize sua clínica com facilidade e inteligência.</p>
+              <h2 className="text-xl font-semibold dark:text-slate-100">Bem-vindo</h2>
+              <p className="text-sm text-slate-500 dark:text-slate-400">Entre para gerenciar sua clínica ou seus agendamentos.</p>
             </div>
             <div className="space-y-4">
               <button 
@@ -353,11 +388,58 @@ export default function App() {
           </div>
           
           <p className="text-xs text-slate-400 dark:text-slate-500">
-            Ao entrar, você concorda com nossos termos de uso e política de privacidade.
+            Psicólogos e pacientes utilizam a mesma conta para acessar suas áreas específicas.
           </p>
         </div>
       </div>
     );
+  }
+
+  if (!profile) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 dark:bg-slate-950 p-4">
+        <div className="max-w-md w-full space-y-8 text-center bg-white dark:bg-slate-900 p-8 rounded-3xl shadow-xl">
+          <div className="flex justify-center mb-4">
+            <Logo size="md" />
+          </div>
+          <div className="space-y-2">
+            <h2 className="text-2xl font-bold dark:text-white">Bem-vindo ao PsiFlow!</h2>
+            <p className="text-slate-500 dark:text-slate-400">Escolha o seu tipo de acesso:</p>
+          </div>
+          <div className="grid gap-4">
+            <button 
+              onClick={() => handleSelectRole('psychologist')}
+              className="flex items-center gap-4 p-6 bg-primary/5 hover:bg-primary/10 border-2 border-primary/20 rounded-2xl text-left transition-all group"
+            >
+              <div className="w-12 h-12 bg-primary rounded-xl flex items-center justify-center text-white group-hover:scale-110 transition-transform">
+                <LayoutDashboard size={24} />
+              </div>
+              <div>
+                <p className="font-bold text-lg text-primary">Sou Psicólogo(a)</p>
+                <p className="text-xs text-slate-500">Gerenciar pacientes e agendas</p>
+              </div>
+            </button>
+            <button 
+              onClick={() => handleSelectRole('patient')}
+              className="flex items-center gap-4 p-6 bg-slate-50 hover:bg-slate-100 dark:bg-slate-800/50 dark:hover:bg-slate-800 border-2 border-slate-200 dark:border-slate-700 rounded-2xl text-left transition-all group"
+            >
+              <div className="w-12 h-12 bg-slate-200 dark:bg-slate-700 rounded-xl flex items-center justify-center text-slate-500 group-hover:scale-110 transition-transform text-xs font-bold">
+                P
+              </div>
+              <div>
+                <p className="font-bold text-lg text-slate-900 dark:text-white">Sou Paciente</p>
+                <p className="text-xs text-slate-500">Agendar sessões e ver histórico</p>
+              </div>
+            </button>
+          </div>
+          <button onClick={handleLogout} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 text-sm font-medium">Sair</button>
+        </div>
+      </div>
+    );
+  }
+
+  if (profile.role === 'patient') {
+    return <PatientPortal user={user} profile={profile} onLogout={handleLogout} />;
   }
 
   return (
